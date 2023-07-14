@@ -1,0 +1,143 @@
+*Health monitoring *
+#!/bin/bash
+
+# Set the email address to send notifications to
+EMAIL="youremail@example.com"
+
+# Check the status of the NameNode
+HADOOP_STATUS=$(sudo -u hdfs hadoop dfsadmin -report | grep "Name:")
+
+# Check the status of the DataNodes
+DATANODE_STATUS=$(sudo -u hdfs hadoop dfsadmin -report | grep "Datanodes available:")
+
+# Check the status of the YARN ResourceManager
+YARN_STATUS=$(sudo -u yarn yarn node -list | grep "RUNNING")
+
+# If any of the services are down, send an email notification
+if [ -z "$HADOOP_STATUS" ] || [ -z "$DATANODE_STATUS" ] || [ -z "$YARN_STATUS" ]; then
+    echo "Hadoop cluster health check failed. Sending email notification..."
+    echo "Subject: ALERT: Hadoop cluster health check failed" | /usr/sbin/sendmail $EMAIL
+fi
+
+*user management *
+#!/bin/bash
+
+# Define a function to display usage information
+usage() {
+  echo "Usage: $0 <add|modify|delete> <username> [groups]"
+  echo "  add     - add a new user to Hadoop"
+  echo "  modify  - modify an existing user's groups"
+  echo "  delete  - delete a user from Hadoop"
+  echo "  username - the username to add, modify or delete"
+  echo "  groups  - the list of groups to add the user to (for add and modify only)"
+  echo "            separate multiple groups with spaces"
+  exit 1
+}
+
+# Check that the correct number of arguments was provided
+if [ $# -lt 2 ]; then
+  usage
+fi
+
+# Extract the operation and username from the arguments
+OP=$1
+USERNAME=$2
+
+# Handle each operation
+case $OP in
+  add)
+    # Check that the groups argument was provided
+    if [ $# -lt 3 ]; then
+      usage
+    fi
+    GROUPS=${@:3}
+
+    # Add the user to Hadoop
+    sudo -u hdfs hdfs dfs -mkdir /user/$USERNAME
+    sudo -u hdfs hdfs dfs -chown $USERNAME:$USERNAME /user/$USERNAME
+    sudo -u hdfs hdfs dfsadmin -refreshUserToGroupsMappings
+
+    # Add the user to the specified groups
+    for GROUP in $GROUPS; do
+      sudo -u hdfs hdfs dfsadmin -addUserToGroup $USERNAME $GROUP
+    done
+    ;;
+
+  modify)
+    # Check that the groups argument was provided
+    if [ $# -lt 3 ]; then
+      usage
+    fi
+    GROUPS=${@:3}
+
+    # Remove the user from all groups
+    for GROUP in $(sudo -u hdfs hdfs groups $USERNAME); do
+      sudo -u hdfs hdfs dfsadmin -removeUserFromGroup $USERNAME $GROUP
+    done
+
+    # Add the user to the specified groups
+    for GROUP in $GROUPS; do
+      sudo -u hdfs hdfs dfsadmin -addUserToGroup $USERNAME $GROUP
+    done
+    ;;
+
+  delete)
+    # Delete the user from Hadoop
+    sudo -u hdfs hdfs dfs -rm -r /user/$USERNAME
+    sudo -u hdfs hdfs dfsadmin -refreshUserToGroupsMappings
+    ;;
+
+  *)
+    usage
+    ;;
+Esac
+
+*Backup script *
+
+#!/bin/bash
+
+# Set the backup directory
+BACKUP_DIR=/backup
+
+# Set the timestamp format for the backup directory
+TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+
+# Set the HDFS paths to backup
+DATA_DIRS="/data1 /data2 /data3"
+CONF_DIRS="/etc/hadoop /etc/hive /etc/hbase"
+
+# Backup data directories
+for DIR in $DATA_DIRS; do
+  BACKUP_PATH=$BACKUP_DIR/data/$(basename $DIR)-$TIMESTAMP
+  echo "Backing up $DIR to $BACKUP_PATH"
+  sudo -u hdfs hdfs dfs -cp -p $DIR $BACKUP_PATH
+done
+
+# Backup configuration directories
+for DIR in $CONF_DIRS; do
+  BACKUP_PATH=$BACKUP_DIR/conf/$(basename $DIR)-$TIMESTAMP
+  echo "Backing up $DIR to $BACKUP_PATH"
+  sudo -u hdfs hdfs dfs -cp -p $DIR $BACKUP_PATH
+done
+
+# Fetch a checkpoint of the HDFS metadata
+CHECKPOINT_DIR=$BACKUP_DIR/checkpoint/$TIMESTAMP
+echo "Fetching HDFS checkpoint to $CHECKPOINT_DIR"
+sudo -u hdfs hdfs dfsadmin -fetchImage $CHECKPOINT_DIR
+
+# Clean up old backups
+OLD_BACKUPS=$(find $BACKUP_DIR -type d -mtime +7)
+if [ -n "$OLD_BACKUPS" ]; then
+  echo "Deleting old backups:"
+  echo "$OLD_BACKUPS"
+  rm -rf $OLD_BACKUPS
+fi
+
+# Set the directory where your logs are stored
+LOG_DIR="/var/log/"
+
+# Set the number of days to keep logs
+DAYS_TO_KEEP=15
+
+# Find files in the log directory that are older than $DAYS_TO_KEEP and delete them
+find $LOG_DIR -type f -mtime +$DAYS_TO_KEEP -exec rm {} \;
